@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SwiftNet Captive Portal</title>
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Poppins', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            purple: '#8B5CF6',
+                            blue: '#3B82F6',
+                            cyan: '#06B6D4',
+                            dark: '#0B0F19'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- React CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <!-- Babel CDN for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body {
+            background-color: #05070c;
+            overflow-x: hidden;
+            font-family: 'Poppins', sans-serif;
+        }
+        /* Animated Mesh Background */
+        .bg-mesh {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: -1;
+            overflow: hidden;
+            background: radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%),
+                        radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.15) 0%, transparent 45%),
+                        radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.1) 0%, transparent 50%);
+            background-color: #05070c;
+        }
+        .blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.55;
+            animation: float 20s infinite alternate;
+        }
+        @keyframes float {
+            0% { transform: translate(0, 0) scale(1); }
+            50% { transform: translate(100px, 80px) scale(1.2); }
+            100% { transform: translate(-50px, -50px) scale(0.9); }
+        }
+        /* Glassmorphism Styles */
+        .glass-card {
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(16px) saturate(180%);
+            -webkit-backdrop-filter: blur(16px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .glass-input {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            transition: all 0.3s;
+        }
+        .glass-input:focus {
+            background: rgba(255, 255, 255, 0.07);
+            border-color: #3B82F6;
+            outline: none;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+        }
+        /* Pricing plan glow */
+        .plan-card-active {
+            border-color: #8B5CF6;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="bg-mesh">
+        <div class="blob bg-blue-600 w-[400px] h-[400px] -top-40 -left-40"></div>
+        <div class="blob bg-purple-600 w-[500px] h-[500px] -bottom-60 -right-40" style="animation-delay: -5s;"></div>
+        <div class="blob bg-cyan-600 w-[300px] h-[300px] top-1/3 left-1/3" style="animation-delay: -10s;"></div>
+    </div>
+
+    <div id="root"></div>
+
+    <!-- Fallback HTML Form for MikroTik Router (For users without JS or direct POST fallback) -->
+    <form id="mikrotik-fallback-form" action="$(link-login)" method="post" class="hidden">
+        <input type="hidden" name="username" id="fallback-username" />
+        <input type="hidden" name="password" id="fallback-password" />
+        <input type="hidden" name="dst" value="$(link-orig)" />
+        <input type="hidden" name="popup" value="true" />
+    </form>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- CONFIGURATION ---
+        // Change this URL to point to your hosted Next.js application API
+        // Example: "https://your-domain.com" or "http://localhost:3000"
+        // Leave empty to use the same origin (when hosted on the same domain)
+        const BACKEND_URL = "http://localhost:3000"; 
+
+        // MikroTik Hotspot variables parsed from Server Side or URL
+        // When writing directly into the router, MikroTik templates will replace $(var) syntax.
+        // In preview mode, we fall back to URL parameters.
+        const MIKROTIK_VARS = {
+            linkLogin: "$(link-login)" || "",
+            linkOrig: "$(link-orig)" || "",
+            chapId: "$(chap-id)" || "",
+            mac: "$(mac)" || "",
+            ip: "$(ip)" || ""
+        };
+
+        function App() {
+            const [tab, setTab] = useState('signup'); // 'signup' | 'login'
+            const [plans, setPlans] = useState([]);
+            const [selectedPlan, setSelectedPlan] = useState(null);
+            const [paymentMethod, setPaymentMethod] = useState('PAYSTACK'); // 'PAYSTACK' | 'SQUAD'
+            
+            // Form inputs
+            const [fullName, setFullName] = useState('');
+            const [phone, setPhone] = useState('');
+            const [email, setEmail] = useState('');
+            const [username, setUsername] = useState('');
+            const [loginIdentifier, setLoginIdentifier] = useState('');
+            
+            // MAC & IP capture
+            const [macAddress, setMacAddress] = useState('');
+            const [ipAddress, setIpAddress] = useState('');
+            const [linkLogin, setLinkLogin] = useState('');
+
+            // UI state
+            const [loading, setLoading] = useState(false);
+            const [loadingMessage, setLoadingMessage] = useState('');
+            const [subscriber, setSubscriber] = useState(null);
+            const [successState, setSuccessState] = useState(false);
+            const [errorMsg, setErrorMsg] = useState('');
+            const [remainingTime, setRemainingTime] = useState(0);
+
+            useEffect(() => {
+                // Parse URL query parameters (MikroTik router appends these when redirecting to captive portal)
+                const urlParams = new URLSearchParams(window.location.search);
+                const mac = urlParams.get('mac') || MIKROTIK_VARS.mac || '';
+                const ip = urlParams.get('ip') || MIKROTIK_VARS.ip || '';
+                const link = urlParams.get('link-login') || MIKROTIK_VARS.linkLogin || '';
+                
+                setMacAddress(mac);
+                setIpAddress(ip);
+                setLinkLogin(link);
+
+                // Fetch plans from Next.js backend
+                const apiBase = BACKEND_URL || window.location.origin;
+                fetch(`${apiBase}/api/admin/plans`)
+                    .then(res => res.json())
+                    .then(data => {
+                        if (Array.isArray(data)) {
+                            setPlans(data);
+                            if (data.length > 0) setSelectedPlan(data[0]);
+                        }
+                    })
+                    .catch(err => {
+                        console.error("Failed to load plans:", err);
+                        // Fallback static plans if backend is unreachable
+                        const fallbackPlans = [
+                            { id: '1', name: '1 Hour Plan', price: 100, duration: 3600, mikrotikProfile: '1h-profile' },
+                            { id: '2', name: '1 Day Plan', price: 500, duration: 86400, mikrotikProfile: '1d-profile' },
+                            { id: '3', name: '1 Week Plan', price: 2000, duration: 604800, mikrotikProfile: '1w-profile' }
+                        ];
+                        setPlans(fallbackPlans);
+                        setSelectedPlan(fallbackPlans[0]);
+                    });
+            }, []);
+
+            const formatDuration = (seconds) => {
+                if (seconds >= 86400) {
+                    const days = Math.floor(seconds / 86400);
+                    return `${days} Day${days > 1 ? 's' : ''}`;
+                }
+                const hrs = Math.floor(seconds / 3600);
+                if (hrs >= 1) return `${hrs} Hour${hrs > 1 ? 's' : ''}`;
+                const mins = Math.floor(seconds / 60);
+                return `${mins} Min${mins > 1 ? 's' : ''}`;
+            };
+
+            const handleSignUp = async (e) => {
+                e.preventDefault();
+                setErrorMsg('');
+                setLoading(true);
+                setLoadingMessage('Creating your subscriber account...');
+
+                const apiBase = BACKEND_URL || window.location.origin;
+                try {
+                    const res = await fetch(`${apiBase}/api/subscriber/signup`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fullName, phone, email, username, macAddress })
+                    });
+                    const data = await res.json();
+                    
+                    if (data.success) {
+                        setSubscriber(data.subscriber);
+                        // Proceed to payment
+                        initiateCheckout(data.subscriber);
+                    } else {
+                        throw new Error(data.error || 'Failed to sign up');
+                    }
+                } catch (err) {
+                    setErrorMsg(err.message);
+                    setLoading(false);
+                }
+            };
+
+            const handleLogin = async (e) => {
+                e.preventDefault();
+                setErrorMsg('');
+                setLoading(true);
+                setLoadingMessage('Logging in...');
+
+                const apiBase = BACKEND_URL || window.location.origin;
+                try {
+                    const res = await fetch(`${apiBase}/api/subscriber/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ identifier: loginIdentifier, macAddress })
+                    });
+                    const data = await res.json();
+
+                    if (data.success) {
+                        setSubscriber(data.subscriber);
+                        if (data.active) {
+                            // Subscriber already has active plan, log them in directly
+                            authenticateOnRouter(data.subscriber.username);
+                        } else {
+                            // Need to purchase a plan
+                            setTab('pricing');
+                            setLoading(false);
+                        }
+                    } else {
+                        throw new Error(data.error || 'Failed to login');
+                    }
+                } catch (err) {
+                    setErrorMsg(err.message);
+                    setLoading(false);
+                }
+            };
+
+            const initiateCheckout = async (subRecord) => {
+                setErrorMsg('');
+                setLoading(true);
+                setLoadingMessage('Initializing secure checkout...');
+
+                const currentSub = subRecord || subscriber;
+                if (!currentSub || !selectedPlan) {
+                    setErrorMsg('Missing plan or subscriber details');
+                    setLoading(false);
+                    return;
+                }
+
+                const apiBase = BACKEND_URL || window.location.origin;
+                try {
+                    const res = await fetch(`${apiBase}/api/pay/initiate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            planId: selectedPlan.id,
+                            subscriberId: currentSub.id,
+                            provider: paymentMethod,
+                            callbackUrl: window.location.href
+                        })
+                    });
+                    const data = await res.json();
+
+                    if (data.success) {
+                        // Open checkout URL
+                        window.location.href = data.checkoutUrl;
+                    } else {
+                        throw new Error(data.error || 'Failed to initialize payment');
+                    }
+                } catch (err) {
+                    setErrorMsg(err.message);
+                    setLoading(false);
+                }
+            };
+
+            const authenticateOnRouter = (username) => {
+                setLoading(true);
+                setLoadingMessage('Authenticating with WiFi Router...');
+                
+                // Set fallback values
+                const fallbackUsernameInput = document.getElementById('fallback-username');
+                const fallbackPasswordInput = document.getElementById('fallback-password');
+                const form = document.getElementById('mikrotik-fallback-form');
+
+                if (fallbackUsernameInput && fallbackPasswordInput && form) {
+                    fallbackUsernameInput.value = username;
+                    fallbackPasswordInput.value = username; // username is the password
+                    
+                    // If link-login query parameter is specified, set form action
+                    if (linkLogin) {
+                        form.action = linkLogin;
+                    }
+                    
+                    setLoadingMessage('Connecting to Internet...');
+                    setTimeout(() => {
+                        form.submit();
+                    }, 800);
+                } else {
+                    setSuccessState(true);
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div class="min-h-screen flex items-center justify-center p-4">
+                    <div class="w-full max-w-lg glass-card rounded-2xl p-8 relative overflow-hidden transition-all duration-300">
+                        {/* Glowing orb accent */}
+                        <div class="absolute top-0 right-0 w-24 h-24 bg-brand-cyan/20 rounded-full blur-2xl"></div>
+                        
+                        {/* Brand Section */}
+                        <div class="text-center mb-8">
+                            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-tr from-brand-blue to-brand-purple p-[1px] mb-4">
+                                <div class="w-full h-full bg-[#0B0F19] rounded-full flex items-center justify-center">
+                                    <svg class="w-8 h-8 text-brand-cyan animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                            <h1 class="text-3xl font-extrabold text-white tracking-wide">SWIFT<span class="text-brand-cyan">NET</span></h1>
+                            <p class="text-gray-400 text-sm mt-1">High-Speed Premium Hotspot</p>
+                        </div>
+
+                        {errorMsg && (
+                            <div class="bg-red-900/30 border border-red-500/50 text-red-200 text-sm px-4 py-3 rounded-lg mb-6 text-center">
+                                {errorMsg}
+                            </div>
+                        )}
+
+                        {loading ? (
+                            <div class="flex flex-col items-center justify-center py-12">
+                                <div class="w-12 h-12 border-4 border-brand-cyan border-t-transparent rounded-full animate-spin mb-4"></div>
+                                <p class="text-white font-medium">{loadingMessage}</p>
+                            </div>
+                        ) : successState ? (
+                            <div class="text-center py-6">
+                                <div class="inline-flex items-center justify-center w-16 h-16 bg-green-500/20 text-green-400 rounded-full mb-6">
+                                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                </div>
+                                <h2 class="text-2xl font-bold text-white mb-2">Login Successful</h2>
+                                <p class="text-gray-300 text-sm mb-4">You are now connected to SwiftNet.</p>
+                                <div class="bg-white/5 border border-white/10 rounded-lg p-4 mb-6">
+                                    <p class="text-xs text-gray-400">YOUR USERNAME / PASSWORD</p>
+                                    <p class="text-lg font-bold text-white tracking-widest mt-1">{subscriber?.username}</p>
+                                </div>
+                                <p class="text-xs text-gray-400">If you are not automatically redirected, please browse to any website.</p>
+                            </div>
+                        ) : tab === 'signup' ? (
+                            <form onSubmit={handleSignUp} class="space-y-5">
+                                <div class="flex border-b border-white/10 mb-6">
+                                    <button type="button" class="w-1/2 pb-3 font-semibold border-b-2 border-brand-cyan text-white">Sign Up</button>
+                                    <button type="button" onClick={() => setTab('login')} class="w-1/2 pb-3 font-semibold text-gray-400 hover:text-white">Login</button>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Full Name</label>
+                                    <input type="text" value={fullName} onChange={e => setFullName(e.target.value)} required placeholder="John Doe" class="w-full glass-input rounded-xl px-4 py-3 text-sm focus:outline-none" />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Phone Number</label>
+                                    <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="e.g. 08012345678" class="w-full glass-input rounded-xl px-4 py-3 text-sm focus:outline-none" />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Email Address</label>
+                                    <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="e.g. customer@email.com" class="w-full glass-input rounded-xl px-4 py-3 text-sm focus:outline-none" />
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Username (Optional)</label>
+                                    <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="Leave blank to auto-generate" class="w-full glass-input rounded-xl px-4 py-3 text-sm focus:outline-none" />
+                                </div>
+                                <button type="submit" class="w-full py-4 bg-gradient-to-r from-brand-blue to-brand-purple hover:from-brand-purple hover:to-brand-blue text-white font-bold rounded-xl transition-all duration-300 shadow-lg hover:shadow-brand-purple/20 transform hover:-translate-y-[1px]">
+                                    Next: Select Plan
+                                </button>
+                            </form>
+                        ) : tab === 'login' ? (
+                            <form onSubmit={handleLogin} class="space-y-5">
+                                <div class="flex border-b border-white/10 mb-6">
+                                    <button type="button" onClick={() => setTab('signup')} class="w-1/2 pb-3 font-semibold text-gray-400 hover:text-white">Sign Up</button>
+                                    <button type="button" class="w-1/2 pb-3 font-semibold border-b-2 border-brand-cyan text-white">Login</button>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Phone, Email or Username</label>
+                                    <input type="text" value={loginIdentifier} onChange={e => setLoginIdentifier(e.target.value)} required placeholder="Enter username, phone, or email" class="w-full glass-input rounded-xl px-4 py-3 text-sm focus:outline-none" />
+                                </div>
+                                <button type="submit" class="w-full py-4 bg-gradient-to-r from-brand-blue to-brand-purple hover:from-brand-purple hover:to-brand-blue text-white font-bold rounded-xl transition-all duration-300 shadow-lg hover:shadow-brand-purple/20 transform hover:-translate-y-[1px]">
+                                    Connect
+                                </button>
+                            </form>
+                        ) : (
+                            /* Pricing tab */
+                            <div class="space-y-6">
+                                <h3 class="text-lg font-semibold text-white text-center">Choose Internet Plan</h3>
+                                
+                                <div class="grid grid-cols-1 gap-3 max-h-60 overflow-y-auto pr-1">
+                                    {plans.map(plan => (
+                                        <div key={plan.id} onClick={() => setSelectedPlan(plan)} class={`glass-card p-4 rounded-xl cursor-pointer flex justify-between items-center transition-all ${selectedPlan?.id === plan.id ? 'plan-card-active border-brand-purple' : 'hover:bg-white/5'}`}>
+                                            <div>
+                                                <h4 class="font-bold text-white">{plan.name}</h4>
+                                                <p class="text-xs text-gray-400 mt-1">Duration: {formatDuration(plan.duration)}</p>
+                                            </div>
+                                            <div class="text-right">
+                                                <span class="text-lg font-bold text-brand-cyan">₦{plan.price}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Payment Gateways */}
+                                <div>
+                                    <label class="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 text-center">Payment Provider</label>
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div onClick={() => setPaymentMethod('PAYSTACK')} class={`glass-card p-4 rounded-xl cursor-pointer text-center transition-all ${paymentMethod === 'PAYSTACK' ? 'border-brand-blue shadow-lg shadow-brand-blue/10 bg-brand-blue/5' : 'hover:bg-white/5'}`}>
+                                            <p class="font-bold text-white text-sm">Paystack</p>
+                                            <span class="text-[10px] text-gray-400">Card / Bank / Transfer</span>
+                                        </div>
+                                        <div onClick={() => setPaymentMethod('SQUAD')} class={`glass-card p-4 rounded-xl cursor-pointer text-center transition-all ${paymentMethod === 'SQUAD' ? 'border-brand-purple shadow-lg shadow-brand-purple/10 bg-brand-purple/5' : 'hover:bg-white/5'}`}>
+                                            <p class="font-bold text-white text-sm">Squad</p>
+                                            <span class="text-[10px] text-gray-400">Card / USSD / Transfer</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <button onClick={() => initiateCheckout()} class="w-full py-4 bg-gradient-to-r from-brand-cyan to-brand-blue hover:from-brand-blue hover:to-brand-cyan text-white font-bold rounded-xl transition-all duration-300 shadow-lg transform hover:-translate-y-[1px]">
+                                    Pay ₦{selectedPlan?.price} Now
+                                </button>
+                                
+                                <button onClick={() => setTab('signup')} class="w-full text-center text-xs text-gray-400 hover:text-white mt-2">
+                                    Go Back
+                                </button>
+                            </div>
+                        )}
+                        
+                        {macAddress && (
+                            <div class="mt-6 pt-4 border-t border-white/5 flex justify-between items-center text-[10px] text-gray-500">
+                                <span>MAC: {macAddress}</span>
+                                <span>IP: {ipAddress}</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

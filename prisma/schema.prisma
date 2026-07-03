@@ -1,0 +1,120 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Admin {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Plan {
+  id              String        @id @default(uuid())
+  name            String
+  price           Float
+  duration        Int           // duration in seconds
+  mikrotikProfile String
+  rateLimit       String        // e.g. "5M/5M"
+  sessionTimeout  Int           // in seconds
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  subscribers     Subscriber[]
+  transactions    Transaction[]
+}
+
+model Subscriber {
+  id                 String        @id @default(uuid())
+  fullName           String
+  phone              String        @unique
+  email              String        @unique
+  username           String        @unique
+  macAddress         String?       // Bound MAC address
+  currentPlanId      String?
+  currentPlan        Plan?         @relation(fields: [currentPlanId], references: [id], onDelete: SetNull)
+  subscriptionStart  DateTime?
+  subscriptionExpiry DateTime?
+  status             String        @default("INACTIVE") // ACTIVE, EXPIRED, INACTIVE
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  transactions       Transaction[]
+}
+
+model Transaction {
+  id           String     @id @default(uuid())
+  subscriberId String
+  subscriber   Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  planId       String
+  plan         Plan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  provider     String     // PAYSTACK, SQUAD
+  providerRef  String     @unique
+  amount       Float
+  status       String     @default("PENDING") // PENDING, SUCCESS, FAILED
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Settings {
+  id                 String   @id @default("single-settings")
+  // MikroTik
+  routerHost         String   @default("")
+  routerPort         Int      @default(8728)
+  routerUser         String   @default("")
+  routerPasswordEnc  String   @default("") // Encrypted at rest
+  // Payments
+  paystackEnabled    Boolean  @default(false)
+  paystackPublicKey  String   @default("")
+  paystackSecretEnc  String   @default("") // Encrypted at rest
+  squadEnabled       Boolean  @default(false)
+  squadPublicKey     String   @default("")
+  squadSecretEnc     String   @default("") // Encrypted at rest
+  // Email
+  emailEnabled       Boolean  @default(false)
+  emailHost          String   @default("")
+  emailPort          Int      @default(587)
+  emailUser          String   @default("")
+  emailPasswordEnc   String   @default("") // Encrypted at rest
+  emailFrom          String   @default("")
+  emailFromName      String   @default("")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model BlogPost {
+  id          String   @id @default(uuid())
+  title       String
+  slug        String   @unique
+  excerpt     String?
+  content     String   @db.Text
+  coverImage  String?
+  published   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PageContent {
+  id          String   @id @default(uuid())
+  pageKey     String   @unique // 'home', 'about', 'contact', etc.
+  title       String
+  content     String   @db.Text
+  metadata    Json?    // For storing additional structured data (hero images, etc.)
+  updatedAt   DateTime @updatedAt
+}
+
+model ContactMessage {
+  id          String   @id @default(uuid())
+  name        String
+  email       String
+  phone       String?
+  subject     String
+  message     String   @db.Text
+  status      String   @default("NEW") // NEW, READ, REPLIED
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
